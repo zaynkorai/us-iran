@@ -2,6 +2,7 @@ import * as p from "@clack/prompts";
 import chalk from "chalk";
 import fs from "fs/promises";
 import path from "path";
+import { z } from "zod/v4";
 import {
     LLMClient,
     runFullSimulation,
@@ -11,16 +12,16 @@ import {
     Provisioner,
     resolveLanguageModel,
     FrameworkConfig,
+    GenericStateObject,
 } from "../../index.js";
-import { z } from "zod/v4";
 
-interface ScenarioActor {
-    id: string;
-    name: string;
-    role: string;
-    personality: string;
-    immutableCore: string;
-}
+const ScenarioActorSchema = z.object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    role: z.string().min(1),
+    personality: z.string().min(1),
+    immutableCore: z.string().min(1),
+});
 
 const ScenarioSchema = z.object({
     name: z.string().min(1),
@@ -28,14 +29,31 @@ const ScenarioSchema = z.object({
     context: z.string().min(1),
     initialState: z.object({
         variables: z.record(z.string(), z.any()),
+        turn_number: z.number().int().optional(),
+        current_speaker_id: z.string().optional(),
+        is_terminal: z.boolean().optional(),
+        scout_hypotheses: z.array(z.object({
+            title: z.string(),
+            feasibility_score: z.number().int().min(1).max(10),
+            disruption_target: z.string(),
+        })).optional(),
+        injections: z.record(z.string(), z.any()).optional(),
     }),
-    actors: z.array(z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
-        role: z.string().min(1),
-        personality: z.string().min(1),
-        immutableCore: z.string().min(1),
-    })).min(2),
+    actors: z.array(ScenarioActorSchema).min(2)
+        .superRefine((actors, ctx) => {
+            const seen = new Set<string>();
+            for (let i = 0; i < actors.length; i++) {
+                const id = actors[i].id;
+                if (seen.has(id)) {
+                    ctx.addIssue({
+                        code: "custom",
+                        message: `Duplicate actor id: ${id}`,
+                        path: [i, "id"],
+                    });
+                }
+                seen.add(id);
+            }
+        }),
     config: FrameworkConfig.partial().default({}),
     prompts: z.object({
         judge_rubric: z.string(),
@@ -50,6 +68,52 @@ const ScenarioSchema = z.object({
 });
 
 type Scenario = z.infer<typeof ScenarioSchema>;
+
+interface SimulateOptions {
+    scenario?: string;
+    provider?: string;
+    model?: string;
+    maxGenerations?: string;
+    yes?: boolean;
+}
+
+function ensureApiKeyPresent(): void {
+    if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+        throw new Error("No LLM API key detected. Please set OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or ANTHROPIC_API_KEY.");
+    }
+}
+
+function buildInitialState(scenario: Scenario): z.infer<typeof GenericStateObject> {
+    return GenericStateObject.parse({
+        turn_number: scenario.initialState.turn_number ?? 0,
+        current_speaker_id: scenario.initialState.current_speaker_id ?? scenario.actors[0].id,
+        is_terminal: scenario.initialState.is_terminal ?? false,
+        scout_hypotheses: scenario.initialState.scout_hypotheses,
+        injections: scenario.initialState.injections,
+        variables: scenario.initialState.variables,
+    });
+}
+
+async function loadScenarioFromFile(filePath: string): Promise<Scenario> {
+    const content = await fs.readFile(filePath, "utf-8");
+    return ScenarioSchema.parse(JSON.parse(content));
+}
+
+async function selectScenarioFile(scenariosDir: string): Promise<string | "CREATE_NEW" | null> {
+    const files = await fs.readdir(scenariosDir).catch(() => []);
+    const jsonFiles = files.filter(f => f.endsWith(".json"));
+
+    const choices = jsonFiles.map(f => ({ label: f, value: path.join(scenariosDir, f) }));
+    choices.unshift({ label: chalk.green("+ Create New Scenario (Q&A)"), value: "CREATE_NEW" });
+
+    const selection = await p.select({
+        message: "Select a simulation scenario or create a new one:",
+        options: choices,
+    });
+
+    if (p.isCancel(selection)) return null;
+    return selection as string | "CREATE_NEW";
+}
 
 async function createInteractiveScenario(): Promise<Scenario | null> {
     const name = await p.text({
@@ -71,12 +135,12 @@ async function createInteractiveScenario(): Promise<Scenario | null> {
     });
     if (p.isCancel(context)) return null;
 
-    const actors: ScenarioActor[] = [];
+    const actors: Array<z.infer<typeof ScenarioActorSchema>> = [];
     let addMore = true;
     while (addMore || actors.length < 2) {
         const count = actors.length + 1;
         p.log.step(`Define Actor #${count}${actors.length < 2 ? " (Minimum 2 required)" : ""}`);
-        const actorName = await p.text({ message: `Actor Name:`, placeholder: `Actor ${count}` });
+        const actorName = await p.text({ message: "Actor Name:", placeholder: `Actor ${count}` });
         if (p.isCancel(actorName)) return null;
 
         const actorRole = await p.text({ message: "Actor Role:", placeholder: "Strategic Stakeholder" });
@@ -89,11 +153,11 @@ async function createInteractiveScenario(): Promise<Scenario | null> {
         if (p.isCancel(core)) return null;
 
         actors.push({
-            id: actorName.toLowerCase().replace(/\s+/g, "_"),
-            name: actorName,
-            role: actorRole,
-            personality,
-            immutableCore: core,
+            id: String(actorName).toLowerCase().replace(/\s+/g, "_"),
+            name: String(actorName),
+            role: String(actorRole),
+            personality: String(personality),
+            immutableCore: String(core),
         });
 
         if (actors.length >= 2) {
@@ -105,25 +169,21 @@ async function createInteractiveScenario(): Promise<Scenario | null> {
         }
     }
 
-    const scenario: Scenario = {
-        name: name as string,
-        description: description as string,
-        context: context as string,
-        initialState: {
-            variables: {
-                global_tension_level: 5,
-            }
-        },
+    const scenario = ScenarioSchema.parse({
+        name,
+        description,
+        context,
+        initialState: { variables: { global_tension_level: 5 } },
         actors,
         config: {
             epoch_size: 2,
             max_turns_per_episode: 6,
             max_generations: 3,
-            improvement_margin: 0.1
+            improvement_margin: 0.1,
         },
         prompts: {},
         runtime: {},
-    };
+    });
 
     const save = await p.confirm({
         message: "Would you like to save this scenario to the scenarios/ directory?",
@@ -133,89 +193,48 @@ async function createInteractiveScenario(): Promise<Scenario | null> {
     if (save && !p.isCancel(save)) {
         const filename = `${scenario.name.toLowerCase().replace(/\s+/g, "-")}.json`;
         const dir = path.join(process.cwd(), "scenarios");
-        try {
-            await fs.mkdir(dir, { recursive: true });
-            await fs.writeFile(path.join(dir, filename), JSON.stringify(scenario, null, 2));
-            p.log.success(`Scenario saved to ${chalk.cyan(path.join("scenarios", filename))}`);
-        } catch (err) {
-            p.log.error("Failed to save scenario file.");
-        }
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, filename), JSON.stringify(scenario, null, 2));
+        p.log.success(`Scenario saved to ${chalk.cyan(path.join("scenarios", filename))}`);
     }
 
     return scenario;
 }
 
-export async function simulateCommand(options: {
-    scenario?: string;
-    provider?: string;
-    model?: string;
-    maxGenerations?: string;
-}) {
+async function resolveScenario(options: SimulateOptions, scenariosDir: string): Promise<Scenario | null> {
+    if (options.scenario) {
+        const scenarioPath = path.resolve(process.cwd(), options.scenario);
+        return loadScenarioFromFile(scenarioPath);
+    }
+
+    const selection = await selectScenarioFile(scenariosDir);
+    if (!selection) return null;
+
+    if (selection === "CREATE_NEW") {
+        return createInteractiveScenario();
+    }
+
+    return loadScenarioFromFile(selection);
+}
+
+export async function simulateCommand(options: SimulateOptions) {
     p.intro(chalk.bgCyan.black(" SISC - No-Code Simulation "));
 
     const scenariosDir = path.join(process.cwd(), "scenarios");
-    let scenario: Scenario | null = null;
-
-    if (options.scenario) {
-        const scenarioPath = path.resolve(process.cwd(), options.scenario);
-        try {
-            const content = await fs.readFile(scenarioPath, "utf-8");
-            scenario = ScenarioSchema.parse(JSON.parse(content));
-        } catch (err) {
-            p.log.error(chalk.red(`Failed to load scenario from ${options.scenario}`));
-            p.log.error(err instanceof Error ? err.message : String(err));
-            process.exit(1);
-        }
-    } else {
-        const files = await fs.readdir(scenariosDir).catch(() => []);
-        const jsonFiles = files.filter(f => f.endsWith(".json"));
-
-        const choices = jsonFiles.map(f => ({ label: f, value: path.join(scenariosDir, f) }));
-        choices.unshift({ label: chalk.green("+ Create New Scenario (Q&A)"), value: "CREATE_NEW" });
-
-        const selection = await p.select({
-            message: "Select a simulation scenario or create a new one:",
-            options: choices,
-        });
-
-        if (p.isCancel(selection)) {
-            p.outro("Simulation cancelled.");
-            process.exit(0);
-        }
-
-        if (selection === "CREATE_NEW") {
-            scenario = await createInteractiveScenario();
-            if (!scenario) {
-                p.outro("Simulation cancelled.");
-                process.exit(0);
-            }
-        } else {
-            try {
-                const content = await fs.readFile(selection as string, "utf-8");
-                scenario = ScenarioSchema.parse(JSON.parse(content));
-            } catch (err) {
-                p.log.error(chalk.red("Failed to load selected scenario."));
-                p.log.error(err instanceof Error ? err.message : String(err));
-                process.exit(1);
-            }
-        }
-    }
-
-    if (!scenario) {
-        p.log.error(chalk.red("No scenario provided."));
-        process.exit(1);
-    }
-
-    if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
-        p.log.error(chalk.red("No LLM API key detected. Please set OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or ANTHROPIC_API_KEY."));
-        process.exit(1);
-    }
-
-    p.log.info(chalk.bold(`Scenario: ${scenario.name}`));
-    p.log.info(chalk.dim(scenario.description));
-    p.log.step("Initializing framework components...");
 
     try {
+        const scenario = await resolveScenario(options, scenariosDir);
+        if (!scenario) {
+            p.outro("Simulation cancelled.");
+            return;
+        }
+
+        ensureApiKeyPresent();
+
+        p.log.info(chalk.bold(`Scenario: ${scenario.name}`));
+        p.log.info(chalk.dim(scenario.description));
+        p.log.step("Initializing framework components...");
+
         const selectedProvider = options.provider ?? scenario.runtime.provider;
         const selectedModel = options.model ?? scenario.runtime.model;
         const model = resolveLanguageModel(selectedProvider, selectedModel);
@@ -240,32 +259,30 @@ export async function simulateCommand(options: {
             });
         }
 
-        const judgeSystemPrompt = scenario.prompts.judge_system_prompt ??
-            "You are an impartial, mathematically rigorous evaluator. You have no allegiance to any agent. You evaluate OUTCOMES, not intentions.";
         const judge = new Critic(
-            scenario.prompts.judge_rubric ??
-            "Evaluate based on strategic depth, adherence to goals, and avoidance of unnecessary destructive escalation unless aligned with core interests.",
-            judgeSystemPrompt,
-            llmClient
+            scenario.prompts.judge_rubric ?? "Evaluate based on strategic depth, adherence to goals, and avoidance of unnecessary destructive escalation unless aligned with core interests.",
+            scenario.prompts.judge_system_prompt ?? "You are an impartial, mathematically rigorous evaluator. You have no allegiance to any agent. You evaluate OUTCOMES, not intentions.",
+            llmClient,
         );
-
-        const mutatorSystemPrompt = scenario.prompts.mutator_system_prompt ??
-            "You are an expert AI Strategist and Prompt Engineer. Your objective is to review a failed simulation episode and generate exactly THREE new, distinct strategic tactics.";
-        const mutator = new Mutator(mutatorSystemPrompt, llmClient);
-
-        const provisionerSystemPrompt = scenario.prompts.provisioner_system_prompt ??
-            "You are a Macro-Systems Architect. The primary negotiation environment is fundamentally deadlocked. Your objective is to design, provision, and deploy a brand new Agent.";
-        const provisioner = new Provisioner(provisionerSystemPrompt, llmClient);
+        const mutator = new Mutator(
+            scenario.prompts.mutator_system_prompt ?? "You are an expert AI Strategist and Prompt Engineer. Your objective is to review a failed simulation episode and generate exactly THREE new, distinct strategic tactics.",
+            llmClient,
+        );
+        const provisioner = new Provisioner(
+            scenario.prompts.provisioner_system_prompt ?? "You are a Macro-Systems Architect. The primary negotiation environment is fundamentally deadlocked. Your objective is to design, provision, and deploy a brand new Agent.",
+            llmClient,
+        );
 
         p.log.success("Environment ready.");
 
-        const startSimulation = await p.confirm({
-            message: "Start the self-improvement simulation?",
-        });
-
-        if (p.isCancel(startSimulation) || !startSimulation) {
-            p.outro("Simulation aborted.");
-            process.exit(0);
+        if (!options.yes) {
+            const startSimulation = await p.confirm({
+                message: "Start the self-improvement simulation?",
+            });
+            if (p.isCancel(startSimulation) || !startSimulation) {
+                p.outro("Simulation aborted.");
+                return;
+            }
         }
 
         const simSpinner = p.spinner();
@@ -273,7 +290,7 @@ export async function simulateCommand(options: {
 
         await runFullSimulation({
             config: frameworkConfig,
-            initialState: scenario.initialState as any,
+            initialState: buildInitialState(scenario),
             agents: activeAgents,
             judge,
             mutator,
@@ -285,15 +302,11 @@ export async function simulateCommand(options: {
                 const avgTotal = allScores.reduce((sum, val) => sum + val, 0) / allScores.length;
                 simSpinner.message(`Gen ${gen}: Global Performance Mean: ${avgTotal.toFixed(2)}`);
             },
-            onPhaseChange: (phase) => {
-                p.log.info(chalk.blue(phase));
-            },
+            onPhaseChange: (phase) => p.log.info(chalk.blue(phase)),
             onTurnComplete: (speakerId, dialogue) => {
-                // Determine color based on index in actor list or simplified mapping
                 const colors = [chalk.blue, chalk.green, chalk.yellow, chalk.cyan, chalk.magenta];
                 const index = Object.keys(activeAgents).indexOf(speakerId);
                 const color = index !== -1 ? colors[index % colors.length] : chalk.white;
-
                 p.log.message(`${color.bold(speakerId)}: ${chalk.white(dialogue)}`);
             },
             onAgentCreated: (agentId, archetype) => {
@@ -303,7 +316,6 @@ export async function simulateCommand(options: {
 
         simSpinner.stop(chalk.green("Simulation completed."));
         p.outro("Self-improvement cycle finished.");
-
     } catch (err) {
         p.log.error(chalk.red("Simulation error:"));
         p.log.error(err instanceof Error ? err.message : String(err));

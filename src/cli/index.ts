@@ -22,6 +22,7 @@ program
 program
     .command("init")
     .description("Initialize a new SISC project in the current directory")
+    .option("-y, --yes", "Skip confirmation prompts")
     .action(initCommand);
 
 program
@@ -36,6 +37,7 @@ program
     .option("--provider <provider>", "LLM provider override (openai|google|anthropic)")
     .option("--model <model>", "LLM model override")
     .option("--max-generations <number>", "Override max generations for this run")
+    .option("-y, --yes", "Skip confirmation prompt before starting the simulation")
     .action(simulateCommand);
 
 program.parse(process.argv);

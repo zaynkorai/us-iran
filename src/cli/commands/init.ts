@@ -4,7 +4,6 @@ import fs from "fs/promises";
 import path from "path";
 import { templateConfig, templateIndex, templateState } from "../templates/index.js";
 import { templateAgent } from "../templates/agent.js";
-import { fileURLToPath } from "url";
 
 async function safeWrite(filePath: string, content: string) {
     try {
@@ -15,16 +14,18 @@ async function safeWrite(filePath: string, content: string) {
     }
 }
 
-export async function initCommand() {
+export async function initCommand(options?: { yes?: boolean }) {
     p.intro(chalk.bgCyan.black(" SISC - Initialize Project "));
 
     const s = p.spinner();
 
     const cwd = process.cwd();
-    const isReady = await p.confirm({
-        message: `Initialize a new SISC project in ${cwd}?`,
-        initialValue: true,
-    });
+    const isReady = options?.yes
+        ? true
+        : await p.confirm({
+            message: `Initialize a new SISC project in ${cwd}?`,
+            initialValue: true,
+        });
 
     if (p.isCancel(isReady) || !isReady) {
         p.cancel("Operation cancelled.");
@@ -45,8 +46,8 @@ export async function initCommand() {
   "type": "module",
   "dependencies": {
     "sisc": "^${siscVersion}",
-    "@ai-sdk/openai": "^3.1.20",
-    "zod": "^3.24.1"
+    "@ai-sdk/openai": "^3.0.30",
+    "zod": "^4.3.6"
   }
 }
 `;
