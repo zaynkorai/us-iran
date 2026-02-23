@@ -8,15 +8,17 @@ Unless a new strategy mathematically yields a higher score against a statistical
 
 The `Judge` Meta-Agent evaluates every completed episode in isolation. It does not know the history of the actors. It only sees the definitive start state, the final end state, and the transcript.
 
-### The Objective Function (Maximize Concessions, Minimize Losses)
-For any Agent $i$ (e.g., Agent A), the Judge calculates a continuous or discrete score $S_i$ based on the final configuration of the `GenericStateObject` ($State_{final}$).
+### The Objective Function (Multi-Agent Utility)
+For any Agent $i$ (e.g., Agent A), the Judge calculates a continuous or discrete reward score $S_i$ based on the final configuration of the `GenericStateObject` ($State_{final}$) and the environmental trajectory.
 
-The fundamental scoring logic follows a simplistic reward function:
-$$ S_i = w_{primary} \cdot f(Target_i) - w_{penalty} \cdot g(Concession_i) $$
+The fundamental scoring logic applies a non-linear utility function, time discounting, and an environmental penalty (combining MARL and Behavioral Game Theory):
+$$ S_i = \gamma^t \left[ w_{primary} \cdot f(Target_i) - w_{penalty} \cdot g(Concession_i) \right] - w_{chaos} \cdot h(\Delta Tension) $$
 
 Where:
-*   $f(Target_i)$: The degree to which Agent $i$ achieved its primary required parameters.
-*   $g(Concession_i)$: The degree to which Agent $i$ was forced to yield its own critical resources.
+*   $\gamma^t$: A time discount factor penalizing stalled negotiations (deals reached in fewer turns hold higher utility).
+*   $f(Target_i)$: The non-linear utility of achieving primary required parameters (accounting for diminishing returns).
+*   $g(Concession_i)$: The penalty for yielding critical resources.
+*   $h(\Delta Tension)$: An external penalty for destabilizing the environment or drastically increasing the global tension variable.
 *   $w$: Weighting coefficients assigned to the simulation's ruleset.
 
 ### Discrete Rubric Implementation (-5 to +5)
@@ -40,24 +42,26 @@ Let $N$ be the number of shadow trials (e.g., $N = 10$).
 1.  Run $N$ simulated episodes using Agent A (Strategy V1) vs Agent B. Calculate the average Judge score: $\mu_{baseline}$.
 2.  Run $N$ isolated episodes using Agent A (Strategy V2) vs Agent B. Calculate the average Judge score: $\mu_{mutated}$.
 
-### The Acceptance Criteria (P-Value & Thresholds)
+### The Acceptance Criteria (Lower Confidence Bound & Thresholds)
 The Mutator will **only** commit Strategy V2 to production if two conditions are met:
 
-1.  **Absolute Improvement**: The new average score must be higher than the old average score.
-    $$ \mu_{mutated} > \mu_{baseline} + \delta $$
-    (Where $\delta$ is a configurable margin of error, default = 0.5 points).
+1.  **Stable Improvement (Variance-Aware)**: In highly stochastic environments, relying purely on the mean ($\mu$) is insufficient. The framework utilizes a Lower Confidence Bound (LCB) to ensure the mutation is both mathematically superior *and* stable, penalizing high variance ($\sigma$) strategies.
+    $$ (\mu_{mutated} - \lambda \cdot \sigma_{mutated}) > \mu_{baseline} + \delta $$
+    (Where $\delta$ is a configurable margin of improvement, and $\lambda$ scales the variance penalty).
 
-2.  **Statistical Significance (Optional/Advanced)**: For enterprise deployments, the framework supports calculating a standard independent two-sample T-test. Strategy V2 is only accepted if the calculated $p$-value is less than $0.05$ (meaning there is a 95% probability the improvement is due to the strategy mutation, not just standard deviation in LLM generation). **Note:** For small sample sizes ($N < 30$), the Mann-Whitney U test (a non-parametric alternative) is recommended, as it does not assume a normal distribution of scores.
+2.  **Statistical Significance (MARL Standard)**: For enterprise deployments, the framework calculates an independent two-sample T-test or a non-parametric alternative (Mann-Whitney U test for $N < 30$). Strategy V2 is only accepted if the $p$-value $< 0.05$, verifying the improvement is due to fundamental strategy changes, not random environmental noise.
 
-## 3. The Mathematics of Evolution
+## 3. The Mathematics of Co-Evolution and the Red Queen
 
-Because of this strict Arena logic, the performance of any Agent in the framework over Time ($t$) is structurally guaranteed to be **Monotonically Non-Decreasing**.
+In a multi-agent Reinforcement Learning environment, true absolute monotonicity is impossible due to the **Red Queen Hypothesis**: as Agent A improves, Agent B also adapts, meaning absolute scores will fluctuate. 
 
-$$ \mu(t+1) \geq \mu(t) $$
+Therefore, evolutionary progress in the framework is measured strictly via **Relative Monotonicity** against historical frozen benchmarks (or via Elo ratings).
 
-If the Mutator generates 100 terrible, hallucinated, or flawed strategies in a row, the `Arena` will reject all 100 of them because $\mu_{mutated} < \mu_{baseline}$. The Agent will simply continue using the baseline strategy until the Mutator randomly discovers a prompt modification that mathematically beats the benchmark. 
+$$ \mu_{Agent\,A}(t) \text{ vs } Benchmark(t-1) \geq \mu_{Agent\,A}(t-1) \text{ vs } Benchmark(t-1) $$
 
-This strict mathematical gating is the framework's absolute defense against "Autonomy Drift."
+If the Mutator generates 100 terrible, hallucinated, or flawed strategies in a row, the `Arena` will reject all 100 of them because their Lower Confidence Bound fails to beat the benchmark. The Agent will simply continue using the baseline strategy until the Mutator discovers a probabilistically superior prompt. 
+
+This relative mathematical gating ensures the framework naturally resists "Autonomy Drift" without making false linear guarantees about absolute metrics.
 
 ## 4. The Provisioner Trigger Formula
 
