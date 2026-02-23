@@ -51,6 +51,7 @@ export { SqliteDatabase, VectorMemory } from "./memory/index.js";
 
 // LLM
 export { LLMClient } from "./llm/index.js";
+export { resolveLanguageModel } from "./llm/index.js";
 
 // Errors
 export {

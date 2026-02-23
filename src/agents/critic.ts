@@ -35,7 +35,7 @@ export class Critic {
         initialState: GenericStateObject,
         finalState: GenericStateObject,
         transcript: object[],
-    ): Promise<JudgeEvaluationType> {
+    ): Promise<{ scores: Record<string, number>; rationales: Record<string, string> }> {
         const prompt = JSON.stringify({
             scoring_rubric: this.rubric,
             initial_state: initialState,
@@ -52,6 +52,15 @@ export class Critic {
             { temperature: 0.3 },
         );
 
-        return result.object;
+        // Transform structured array back into records for internal framework consumption
+        const scores: Record<string, number> = {};
+        const rationales: Record<string, string> = {};
+
+        for (const evaluation of result.object.individual_evaluations) {
+            scores[evaluation.agent_id] = evaluation.score;
+            rationales[evaluation.agent_id] = evaluation.rationale;
+        }
+
+        return { scores, rationales };
     }
 }

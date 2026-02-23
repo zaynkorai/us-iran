@@ -92,13 +92,17 @@ export class Provisioner {
         epochResults: EpochResult[],
         semanticMemoryContext?: object[]
     ): Promise<string> {
-        const scores = epochResults.map(([_, a, b]) => ({ agent_a: a, agent_b: b }));
-        const avgA = scores.reduce((s, r) => s + r.agent_a, 0) / scores.length;
-        const avgB = scores.reduce((s, r) => s + r.agent_b, 0) / scores.length;
+        const agentIds = Object.keys(epochResults[0][1]);
+        const averages: Record<string, number> = {};
+
+        for (const id of agentIds) {
+            const sum = epochResults.reduce((s, r) => s + (r[1][id] ?? 0), 0);
+            averages[id] = sum / epochResults.length;
+        }
 
         const analysisPrompt = JSON.stringify({
             instruction: "Analyze the current state and semantic history. Why are the agents deadlocked? Identify the immutable goals causing friction and gaps in the State Object.",
-            average_scores: { agent_a: avgA, agent_b: avgB },
+            average_scores: averages,
             semantic_memory: semanticMemoryContext ?? [],
             environmental_variables: currentState.variables,
         });

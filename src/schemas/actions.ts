@@ -14,8 +14,8 @@ export const ActionProposal = z.object({
     internal_monologue: z.string().describe("Your hidden reasoning (Chain of Thought)."),
     public_dialogue: z.string().describe("What you explicitly say to the other agent."),
     state_mutations: z.array(StateMutation).describe("Proposed changes to the state."),
-    propose_resolution: z.boolean().default(false),
-    abort_episode: z.boolean().default(false),
+    propose_resolution: z.boolean().describe("True if you believe a final agreement has been reached."),
+    abort_episode: z.boolean().describe("True if you wish to terminate the negotiation immediately."),
 });
 export type ActionProposal = z.infer<typeof ActionProposal>;
 
@@ -26,7 +26,7 @@ export type ActionProposal = z.infer<typeof ActionProposal>;
 export const DisruptorReport = z.object({
     headline: z.string(),
     severity: z.enum(["low", "medium", "high"]),
-    inject_into_transcript: z.boolean().default(true),
+    inject_into_transcript: z.boolean(),
 });
 export type DisruptorReport = z.infer<typeof DisruptorReport>;
 
@@ -46,9 +46,10 @@ export type TensionUpdate = z.infer<typeof TensionUpdate>;
  * @see docs/evaluation_and_math.md §1 — The Judge's Scoring Formula
  */
 export const JudgeEvaluation = z.object({
-    agent_a_score: z.number().int().min(-5).max(5),
-    agent_b_score: z.number().int().min(-5).max(5),
-    agent_a_rationale: z.string(),
-    agent_b_rationale: z.string(),
+    individual_evaluations: z.array(z.object({
+        agent_id: z.string().describe("The ID of the agent being evaluated."),
+        score: z.number().int().min(-5).max(5).describe("Numerical score from -5 to +5."),
+        rationale: z.string().describe("Justification for this specific agent's score.")
+    })).describe("A list of evaluations, one for each agent involved in the episode.")
 });
 export type JudgeEvaluation = z.infer<typeof JudgeEvaluation>;

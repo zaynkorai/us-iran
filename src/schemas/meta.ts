@@ -22,12 +22,12 @@ export type CapitalizerHint = z.infer<typeof CapitalizerHint>;
  * @see docs/core_system_prompts.md §2 — The Mutator Prompt
  */
 export const MutationVariant = z.object({
-    variant_id: z.string(),
-    strategy_text: z.string(),
+    variant_id: z.string().describe("A unique ID for this mutation variant."),
+    strategy_text: z.string().describe("The evolved strategy text for the agent."),
     hyperparameters: z.object({
-        temperature: z.number().min(0).max(2).optional(),
-        frequency_penalty: z.number().min(0).max(2).optional(),
-    }),
+        temperature: z.number().min(0).max(2).describe("LLM temperature (0.0 to 2.0)."),
+        frequency_penalty: z.number().min(0).max(2).describe("LLM frequency penalty (0.0 to 2.0)."),
+    }).describe("Model hyperparameters for this variant."),
 });
 export type MutationVariant = z.infer<typeof MutationVariant>;
 
@@ -48,9 +48,9 @@ export type MutatorProposal = z.infer<typeof MutatorProposal>;
 export const AgentPermissions = z.object({
     can_modify_fields: z.array(z.string()).describe("State object paths this agent can modify"),
     cannot_modify_fields: z.array(z.string()).describe("State object paths explicitly denied"),
-    can_abort_episode: z.boolean().default(false),
-    can_propose_resolution: z.boolean().default(false),
-    max_state_mutations_per_turn: z.number().int().default(1),
+    can_abort_episode: z.boolean().describe("Whether this agent can terminate the episode early."),
+    can_propose_resolution: z.boolean().describe("Whether this agent can propose a final agreement."),
+    max_state_mutations_per_turn: z.number().int().describe("Max number of state fields this agent can change per turn."),
 });
 export type AgentPermissions = z.infer<typeof AgentPermissions>;
 

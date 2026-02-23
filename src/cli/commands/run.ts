@@ -21,9 +21,9 @@ export async function runCommand() {
         process.exit(1);
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-        p.log.error(chalk.red("OPENAI_API_KEY environment variable is not set."));
-        p.log.error("Simulation requires an LLM to run. Please set OPENAI_API_KEY.");
+    if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+        p.log.error(chalk.red("No LLM API key detected."));
+        p.log.error("Simulation requires an LLM to run. Please set OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or ANTHROPIC_API_KEY.");
         process.exit(1);
     }
 

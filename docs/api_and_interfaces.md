@@ -124,14 +124,14 @@ class Critic {
   }
 
   /**
-   * Returns [agentAScore, agentBScore, agentARationale, agentBRationale].
+   * Returns a map of agent scores and rationales.
    * Scores are integers from -5 to +5.
    */
   async evaluate(
     initialState: GenericStateObject,
     finalState: GenericStateObject,
     transcript: object[]
-  ): Promise<[number, number, string, string]> { ... }
+  ): Promise<{ scores: Record<string, number>, rationales: Record<string, string> }> { ... }
 }
 ```
 
@@ -182,7 +182,7 @@ class Mutator {
    */
   async evolve(
     agent: ActorAgent,
-    epochResults: Array<[GenericStateObject, number, number]>,
+    epochResults: Array<[GenericStateObject, Record<string, number>]>,
     config: FrameworkConfig
   ): Promise<ActorAgent | null> { ... }
 
@@ -204,7 +204,7 @@ class Provisioner {
    */
   async designAgent(
     currentState: GenericStateObject,
-    epochResults: Array<[GenericStateObject, number, number]>,
+    epochResults: Array<[GenericStateObject, Record<string, number>]>,
     semanticMemoryContext?: object[]
   ): Promise<NewAgentProvisioning> { ... }
 }

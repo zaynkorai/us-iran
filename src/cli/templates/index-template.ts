@@ -1,11 +1,11 @@
 export const templateIndex = `// index.js
-import { runFullSimulation, LLMClient, Critic, Mutator, Provisioner } from "sisc";
-import { openai } from "@ai-sdk/openai";
+import { runFullSimulation, LLMClient, Critic, Mutator, Provisioner, resolveLanguageModel } from "sisc";
 import config from "./sisc.config.js";
 import { MyActor } from "./agents/MyActor.js";
 
-// Ensure you have OPENAI_API_KEY in your environment, or pass it to LLMClient.
-const llmClient = new LLMClient(openai("gpt-5-nano"));
+// Uses resolveLanguageModel() which reads SISC_PROVIDER and SISC_MODEL env vars.
+// Defaults to OpenAI gpt-5-nano if env vars are unset.
+const llmClient = new LLMClient(resolveLanguageModel());
 
 // The default components required for the simulation.
 const judge = new Critic(

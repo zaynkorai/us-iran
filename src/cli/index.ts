@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
 import dotenv from "dotenv";
+
+// Silence dotenv 17+ console output
+process.env.DOTENV_CONFIG_SILENT = "true";
 dotenv.config();
+
 
 import { Command } from "commander";
 import * as p from "@clack/prompts";

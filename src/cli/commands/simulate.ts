@@ -9,8 +9,8 @@ import {
     Critic,
     Mutator,
     Provisioner,
+    resolveLanguageModel,
 } from "../../index.js";
-import { openai } from "@ai-sdk/openai";
 
 interface ScenarioActor {
     id: string;
@@ -57,15 +57,17 @@ async function createInteractiveScenario(): Promise<Scenario | null> {
     if (p.isCancel(context)) return null;
 
     const actors: ScenarioActor[] = [];
-    for (const label of ["First", "Second"]) {
-        p.log.step(`Define ${label} Actor`);
-        const actorName = await p.text({ message: `Actor Name (${label}):`, placeholder: label === "First" ? "USA" : "Iran" });
+    let addMore = true;
+    while (addMore || actors.length < 2) {
+        const count = actors.length + 1;
+        p.log.step(`Define Actor #${count}${actors.length < 2 ? " (Minimum 2 required)" : ""}`);
+        const actorName = await p.text({ message: `Actor Name:`, placeholder: `Actor ${count}` });
         if (p.isCancel(actorName)) return null;
 
-        const actorRole = await p.text({ message: "Actor Role:", placeholder: label === "First" ? "Global Superpower" : "Regional Power" });
+        const actorRole = await p.text({ message: "Actor Role:", placeholder: "Strategic Stakeholder" });
         if (p.isCancel(actorRole)) return null;
 
-        const personality = await p.text({ message: "Actor Personality:", placeholder: "Strategic, assertive..." });
+        const personality = await p.text({ message: "Actor Personality:", placeholder: "Calculated, firm..." });
         if (p.isCancel(personality)) return null;
 
         const core = await p.text({ message: "Immutable Core Directive:", placeholder: `You are the ${actorName} representative...` });
@@ -78,6 +80,14 @@ async function createInteractiveScenario(): Promise<Scenario | null> {
             personality,
             immutableCore: core,
         });
+
+        if (actors.length >= 2) {
+            const more = await p.confirm({
+                message: "Add another actor?",
+                initialValue: false,
+            });
+            if (p.isCancel(more) || !more) addMore = false;
+        }
     }
 
     const scenario: Scenario = {
@@ -172,8 +182,8 @@ export async function simulateCommand(options: { scenario?: string }) {
         process.exit(1);
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-        p.log.error(chalk.red("OPENAI_API_KEY is not set. Simulation requires an LLM."));
+    if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+        p.log.error(chalk.red("No LLM API key detected. Please set OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or ANTHROPIC_API_KEY."));
         process.exit(1);
     }
 
@@ -182,7 +192,7 @@ export async function simulateCommand(options: { scenario?: string }) {
     p.log.step("Initializing framework components...");
 
     try {
-        const model = openai("gpt-5-nano");
+        const model = resolveLanguageModel();
         const llmClient = new LLMClient(model);
 
         const activeAgents: Record<string, ActorAgent> = {};
@@ -239,12 +249,16 @@ export async function simulateCommand(options: { scenario?: string }) {
             provisioner,
             llmClient,
             onGenerationComplete: (gen, results) => {
-                const avgA = results.reduce((sum, r) => sum + r[1], 0) / results.length;
-                const avgB = results.reduce((sum, r) => sum + r[2], 0) / results.length;
-                simSpinner.message(`Gen ${gen}: Avg Scores A: ${avgA.toFixed(2)}, B: ${avgB.toFixed(2)}`);
+                const allScores = results.flatMap(r => Object.values(r[1]));
+                const avgTotal = allScores.reduce((sum, val) => sum + val, 0) / allScores.length;
+                simSpinner.message(`Gen ${gen}: Global Performance Mean: ${avgTotal.toFixed(2)}`);
             },
             onTurnComplete: (speakerId, dialogue) => {
-                const color = speakerId.includes("agent_a") ? chalk.blue : speakerId.includes("agent_b") ? chalk.green : chalk.yellow;
+                // Determine color based on index in actor list or simplified mapping
+                const colors = [chalk.blue, chalk.green, chalk.yellow, chalk.cyan, chalk.magenta];
+                const index = Object.keys(activeAgents).indexOf(speakerId);
+                const color = index !== -1 ? colors[index % colors.length] : chalk.white;
+
                 p.log.message(`${color.bold(speakerId)}: ${chalk.white(dialogue)}`);
             },
             onAgentCreated: (agentId, archetype) => {

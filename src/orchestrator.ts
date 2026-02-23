@@ -111,7 +111,7 @@ export async function runFullSimulation(options: OrchestratorOptions): Promise<v
                     finalState,
                     transcript,
                 );
-                return [finalState, evaluation.agent_a_score, evaluation.agent_b_score] as EpochResult;
+                return [finalState, evaluation.scores] as EpochResult;
             })
         );
         epochResults.push(...(await Promise.all(episodePromises)));
@@ -120,11 +120,13 @@ export async function runFullSimulation(options: OrchestratorOptions): Promise<v
 
         // --- Phase 2: Self-Improvement (Mutate) ---
         // Enforced by docs/system_architecture.md §5 — Mutation Phase
-        // Find the first primary actor to evolve
-        const primaryActorId = Object.keys(agents)[0];
-        const primaryAgent = activeAgents[primaryActorId];
+        // Evolve all primary actors in parallel to eliminate O(N) bottleneck
+        let anyMutationSucceeded = false;
 
-        if (primaryAgent) {
+        const mutationPromises = Object.keys(agents).map(async (primaryActorId) => {
+            const primaryAgent = activeAgents[primaryActorId];
+            if (!primaryAgent) return null;
+
             const runShadowTrial = async (variant: ActorAgent): Promise<number[]> => {
                 const trialPromises = Array.from({ length: config.shadow_trial_count }).map(() =>
                     limit(async () => {
@@ -133,18 +135,26 @@ export async function runFullSimulation(options: OrchestratorOptions): Promise<v
                         const shadowAgents = { ...activeAgents, [primaryActorId]: variant };
                         const [finalState, transcript] = await shadowEnv.runEpisode(shadowAgents);
                         const eval_ = await judge.evaluate(initialState, finalState, transcript);
-                        return eval_.agent_a_score;
+                        return eval_.scores[primaryActorId] ?? 0;
                     })
                 );
                 return Promise.all(trialPromises);
             };
 
             const newAgent = await mutator.evolve(primaryAgent, epochResults, config, runShadowTrial);
-            if (newAgent) {
-                activeAgents[primaryActorId] = newAgent;
-                continue; // Mutation succeeded; skip creation
+            return { primaryActorId, newAgent };
+        }
+        );
+
+        const mutationResults = await Promise.all(mutationPromises);
+        for (const res of mutationResults) {
+            if (res && res.newAgent) {
+                activeAgents[res.primaryActorId] = res.newAgent;
+                anyMutationSucceeded = true;
             }
         }
+
+        if (anyMutationSucceeded) continue; // Mutation succeeded for at least one agent; skip creation
 
         // --- Phase 3: Self-Creation (if plateau detected) ---
         // Enforced by docs/system_architecture.md §5 — Creation Phase
@@ -165,7 +175,13 @@ export async function runFullSimulation(options: OrchestratorOptions): Promise<v
             }
 
             // Phase 3b: The Shadow Test
-            const baseAvgA = epochResults.reduce((s, r) => s + r[1], 0) / epochResults.length;
+            // We use the mean score across ALL primary agents as the baseline
+            const calculateCombinedMean = (results: EpochResult[]) => {
+                const allScores = results.flatMap(r => Object.values(r[1]));
+                return allScores.reduce((s, val) => s + val, 0) / allScores.length;
+            };
+
+            const baseAvg = calculateCombinedMean(epochResults);
             const shadowEnv = new EnvironmentManager(structuredClone(initialState), config);
 
             shadowEnv.turnOrder = Object.keys(activeAgents);
@@ -178,14 +194,18 @@ export async function runFullSimulation(options: OrchestratorOptions): Promise<v
                     env.turnOrder = shadowEnv.turnOrder; // Use the injected sequence
                     const [finalState, transcript] = await env.runEpisode(shadowAgents);
                     const eval_ = await judge.evaluate(initialState, finalState, transcript);
-                    return eval_.agent_a_score;
+                    // For shadow testing a new agent, we still evaluate against the primary actors' success
+                    const primaryScores = Object.entries(eval_.scores)
+                        .filter(([id]) => agents[id])
+                        .map(([_, score]) => score);
+                    return primaryScores.reduce((s, score) => s + score, 0) / primaryScores.length;
                 })
             );
 
             const shadowScores = await Promise.all(shadowTrialPromises);
-            const shadowAvgA = shadowScores.reduce((s, score) => s + score, 0) / shadowScores.length;
+            const shadowAvg = shadowScores.reduce((s, score) => s + score, 0) / shadowScores.length;
 
-            if (shadowAvgA > baseAvgA + config.improvement_margin) {
+            if (shadowAvg > baseAvg + config.improvement_margin) {
 
                 const env = new EnvironmentManager(structuredClone(initialState), config);
                 env.turnOrder = Object.keys(activeAgents);

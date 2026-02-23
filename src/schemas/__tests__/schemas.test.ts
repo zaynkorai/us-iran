@@ -66,6 +66,8 @@ describe("ActionProposal", () => {
             state_mutations: [
                 { action: "modify", path: "concessions.y", value: 65 },
             ],
+            propose_resolution: false,
+            abort_episode: false,
         });
         expect(result.propose_resolution).toBe(false);
         expect(result.abort_episode).toBe(false);
@@ -87,6 +89,7 @@ describe("DisruptorReport", () => {
         const result = DisruptorReport.parse({
             headline: "BREAKING: Talks collapse!",
             severity: "high",
+            inject_into_transcript: true,
         });
         expect(result.inject_into_transcript).toBe(true);
     });
@@ -118,23 +121,24 @@ describe("TensionUpdate", () => {
 });
 
 describe("JudgeEvaluation", () => {
-    it("parses valid evaluation", () => {
+    it("parses valid evaluation with multiple agents", () => {
         const result = JudgeEvaluation.parse({
-            agent_a_score: 3,
-            agent_b_score: -1,
-            agent_a_rationale: "Good performance",
-            agent_b_rationale: "Poor performance",
+            individual_evaluations: [
+                { agent_id: "agent_a", score: 3, rationale: "Good performance" },
+                { agent_id: "agent_b", score: -1, rationale: "Poor performance" },
+                { agent_id: "agent_c", score: 2, rationale: "Moderate performance" }
+            ]
         });
-        expect(result.agent_a_score).toBe(3);
+        expect(result.individual_evaluations).toHaveLength(3);
+        expect(result.individual_evaluations[0].score).toBe(3);
     });
 
     it("rejects scores out of range", () => {
         expect(() =>
             JudgeEvaluation.parse({
-                agent_a_score: 10,
-                agent_b_score: 0,
-                agent_a_rationale: "x",
-                agent_b_rationale: "y",
+                individual_evaluations: [
+                    { agent_id: "agent_a", score: 10, rationale: "Too high" }
+                ]
             }),
         ).toThrow();
     });
@@ -156,9 +160,9 @@ describe("MutatorProposal", () => {
     it("parses valid 3-variant proposal", () => {
         const result = MutatorProposal.parse({
             variants: [
-                { variant_id: "v1", strategy_text: "Aggressive", hyperparameters: {} },
-                { variant_id: "v2", strategy_text: "Passive", hyperparameters: { temperature: 0.5 } },
-                { variant_id: "v3", strategy_text: "Deceptive", hyperparameters: { frequency_penalty: 0.2 } },
+                { variant_id: "v1", strategy_text: "Aggressive", hyperparameters: { temperature: 0.7, frequency_penalty: 0.0 } },
+                { variant_id: "v2", strategy_text: "Passive", hyperparameters: { temperature: 0.5, frequency_penalty: 0.1 } },
+                { variant_id: "v3", strategy_text: "Deceptive", hyperparameters: { temperature: 0.9, frequency_penalty: 0.2 } },
             ],
         });
         expect(result.variants).toHaveLength(3);
@@ -180,6 +184,9 @@ describe("NewAgentProvisioning", () => {
             permissions: {
                 can_modify_fields: ["proposed_state_object.subsidies"],
                 cannot_modify_fields: ["agent_a_concessions"],
+                can_abort_episode: false,
+                can_propose_resolution: false,
+                max_state_mutations_per_turn: 1,
             },
             design_rationale: "Trust deadlock",
         });

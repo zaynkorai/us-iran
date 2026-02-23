@@ -16,9 +16,9 @@ The `Environment` is not an LLM itself, but the deterministic state machine that
 
 #### B. Primary Actors (The Negotiators/Combatants)
 
-These are the primary entities engaged in the simulation (e.g., Agent A vs. Agent B).
+These are the primary entities engaged in the simulation (e.g., $N$ competing interests).
 
-* **Characteristics**: They are driven by opposing system prompts enforcing specific constraints and goals. They operate on a defined `Strategy Prompt`, produce public dialogue, maintain an internal monologue (Chain of Thought), and formally propose modifications to the global `State Object`.
+* **Characteristics**: They are driven by specific system prompts enforcing unique constraints and goals. They operate on a defined `Strategy Prompt`, produce public dialogue, maintain an internal monologue (Chain of Thought), and formally propose modifications to the global `State Object`.
 
 #### C. Observer/Disruptor Agents (The Chaos Factor)
 
@@ -48,7 +48,7 @@ A single "Tick" of the environment follows a strict sequence to ensure determini
 5. **State Update**: The Environment appends the dialogue to the transcript and patches the global `State Object` based on the Actor's proposed modifications.
 6. **Disruptor Check (Tension)**: The Disruptor receives the updated state, outputting a new anxiety level. The Environment updates the global tension variable.
 7. **Disruptor Check (Information)**: Every *N* turns, Information Agents read the transcript, generate synthesized reports, and the Environment appends them to the public transcript.
-8. **Turn Advance**: The `current_speaker` variable switches to the next Actor in the sequence (e.g., Agent B).
+8. **Turn Advance**: The `current_speaker` variable switches to the next Actor in the defined `turnOrder`.
 9. **Context Maintenance**: The Environment prunes/summarizes the current context to maintain optimal token counts. The loop repeats.
 
 ### Execution Loop Sequence Diagram
@@ -98,7 +98,7 @@ These terms are used precisely throughout all documentation. They are defined he
 * **Episode**: A single complete simulation run, from the initial `State Object` to a terminal condition (`abort_episode`, `propose_resolution` agreement, or `max_turns` timeout). An episode produces one Judge score per Actor.
 * **Epoch**: A batch of $N$ episodes (e.g., $N = 10$) run with the same agent configurations. The Mutator analyzes the aggregate results of an epoch to generate mutations.
 * **Generation**: A versioned snapshot of all active agent configurations (System Prompts + Hyperparameters). When the Mutator commits a new strategy, the generation number increments. The framework tracks lineage across generations.
-* **Shadow Trial**: An isolated epoch run in the Arena using a *candidate* mutation against a frozen baseline. Shadow trials never affect production agent state.
+* **Shadow Trial**: An isolated epoch run in the Arena using a *candidate* mutation against the frozen baseline of all other agents. Shadow trials never affect production agent state.
 
 ## 4. The Provisioner's Integration into the Execution Loop
 

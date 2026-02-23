@@ -9,7 +9,7 @@ Unless a new strategy mathematically yields a higher score against a statistical
 The `Judge` Meta-Agent evaluates every completed episode in isolation. It does not know the history of the actors. It only sees the definitive start state, the final end state, and the transcript.
 
 ### The Objective Function (Multi-Agent Utility)
-For any Agent $i$ (e.g., Agent A), the Judge calculates a continuous or discrete reward score $S_i$ based on the final configuration of the `GenericStateObject` ($State_{final}$) and the environmental trajectory.
+For any Agent $i$, the Judge calculates a continuous or discrete reward score $S_i$ based on the final configuration of the `GenericStateObject` ($State_{final}$) and the environmental trajectory.
 
 The fundamental scoring logic applies a non-linear utility function, time discounting, and an environmental penalty (combining MARL and Behavioral Game Theory):
 $$ S_i = \gamma^t \left[ w_{primary} \cdot f(Target_i) - w_{penalty} \cdot g(Concession_i) \right] - w_{chaos} \cdot h(\Delta Tension) $$
@@ -31,9 +31,8 @@ In practice, providing LLMs with continuous floating-point math often degrades r
 *   **-3 (Unfavorable Deal)**: Agent survived, but yielded on primary objectives to secure secondary gains.
 *   **-5 (Systemic Failure / Walk Away)**: Opponent terminated talks due to Agent's hostility, or Agent conceded all primary objectives entirely.
 
-## 2. Statistical Thresholds for the Arena (Shadow Trials)
-
-When the `Mutator` generates a new Strategy Prompt (e.g., Strategy V2), it enters the Arena for "Shadow Trials" against the frozen baseline opponent (e.g., Agent B V1).
+### The Arena Execution Loop (Multi-Armed Bandit & Early Culling)
+When the `Mutator` generates a new Strategy Prompt (e.g., Strategy V2) for Agent $i$, it enters the Arena for "Shadow Trials" against the frozen baseline of all $N-1$ other agents.
 
 The framework uses an A/B testing methodology to determine if Strategy V2 is *mathematically superior* to the current production Strategy V1.
 

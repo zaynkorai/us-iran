@@ -20,8 +20,8 @@ import type { GenericStateObject } from "../schemas/state.js";
 import type { FrameworkConfig } from "../schemas/config.js";
 import { MutatorProposal } from "../schemas/meta.js";
 
-/** Result of a completed episode: [finalState, agentAScore, agentBScore] */
-export type EpochResult = [GenericStateObject, number, number];
+/** Result of a completed episode: [finalState, scoresMap] */
+export type EpochResult = [GenericStateObject, Record<string, number>];
 
 export class Mutator {
     private llmClient: LLMClient;
@@ -55,15 +55,14 @@ export class Mutator {
         runShadowTrial: (variant: ActorAgent) => Promise<number[]>,
     ): Promise<ActorAgent | null> {
         // --- Phase A: Generation ---
-        // Identify worst 20% of episodes
+        // Identify worst 20% of episodes for THIS specific agent
         // Enforced by docs/self_improvement_loop.md §3A — Phase A: Generation
-        const sorted = [...epochResults].sort((a, b) => a[1] - b[1]);
+        const sorted = [...epochResults].sort((a, b) => (a[1][agent.id] ?? 0) - (b[1][agent.id] ?? 0));
         const failingSlice = sorted.slice(0, Math.ceil(sorted.length * 0.2));
 
-        const failureSummary = failingSlice.map(([state, scoreA, scoreB]) => ({
+        const failureSummary = failingSlice.map(([state, scores]) => ({
             final_state: state,
-            agent_a_score: scoreA,
-            agent_b_score: scoreB,
+            agent_score: scores[agent.id] ?? 0,
         }));
 
         // Generate mutation variants via the Mutator LLM
@@ -93,7 +92,7 @@ export class Mutator {
         // Enforced by docs/self_improvement_loop.md §3B — Phase B: Shadow Trials
         let bestVariant: ActorAgent | null = null;
         let bestScore = -Infinity;
-        const baselineScore = this.calculateMean(epochResults.map((r) => r[1]));
+        const baselineScore = this.calculateMean(epochResults.map((r) => r[1][agent.id] ?? 0));
 
         for (const variant of variants) {
             const shadowScores = await runShadowTrial(variant);
