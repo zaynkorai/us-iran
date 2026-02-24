@@ -1,272 +1,172 @@
 # API and Interfaces (The Developer Contract)
 
-To ensure this framework is simple, and usable for developers beyond the US-Iran Simulation, the core library exposes a clean, Object-Oriented API. This document defines the exact class signatures and error-handling fallbacks natively built into the TypeScript application layer.
+To ensure this framework is portable and conceptually clean, the core library exposes a language agnostic API. This document defines the exact boundaries, contracts, and error handling fallbacks using abstract Interface Definition Language (IDL) and data schemas.
 
-## 1. Core Interfaces
+While the reference implementation is a Native TypeScript Library, the architectural contract below is language agnostic.
 
-Developers interact with the following classes to run the framework. All communication between classes uses strictly-typed Zod schemas for runtime validation with full TypeScript type inference.
+> **Configuration source of truth**: See [`configuration_reference.md`](./configuration_reference.md) for the complete `FrameworkConfig` field list and defaults.
 
-> Configuration source of truth: see [`configuration_reference.md`](./configuration_reference.md) for the complete `FrameworkConfig` field list, defaults, and CLI override precedence.
+## 1. Core Data Schemas
 
-### A. The `GenericStateObject` (Zod Schema)
+All communication between agents uses strictly validated structured payloads.
+
+### `GenericStateObject`
 The environment revolves around this shared state. Developers extend this base schema to fit their specific use case.
 
-```typescript
-import { z } from "zod";
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `turn_number` | `Integer` | Yes | The current turn of the execution loop (default: 0). |
+| `current_speaker_id` | `String` | Yes | Identifier of the active agent. |
+| `is_terminal` | `Boolean` | Yes | Whether the episode has ended (default: false). |
+| `scout_hypotheses` | `Array<ConvergenceHypothesisSummary>` | No | Hypotheses injected by the Explorer Agent. |
+| `variables` | `Map<String, Any>` | Yes | Developer-injected specific variables (e.g., tension scores). |
 
-const ConvergenceHypothesisSummary = z.object({
-  title: z.string(),
-  feasibility_score: z.number().int().min(1).max(10),
-  disruption_target: z.string(),
-});
+## 2. Core Service Interfaces
 
-const GenericStateObject = z.object({
-  /** The core object that primary actors negotiate over. */
-  turn_number: z.number().int().default(0),
-  current_speaker_id: z.string(),
-  is_terminal: z.boolean().default(false),
-  
-  /** Hypotheses injected by the Explorer Agent for Primary Actors to debate. */
-  scout_hypotheses: z.array(ConvergenceHypothesisSummary).optional(),
+### `EnvironmentManager`
+The central orchestrator. It manages state transitions, validates schemas returned by models, enforces permissions, and emits events.
 
-  // Developers inject specific variables here
-  // e.g., us_iran_parameters: { ... }
-  variables: z.record(z.string(), z.any()),
-});
+```idl
+interface EnvironmentManager {
+  // State
+  State state;
+  Config config;
+  List<String> turnOrder;
 
-type GenericStateObject = z.infer<typeof GenericStateObject>;
-```
-
-### B. The `EnvironmentManager`
-The orchestrator. It manages state transitions, validates the JSON schemas returned by LLMs, enforces agent permissions, and emits events for logging.
-
-```typescript
-import { EventEmitter } from "events";
-
-class EnvironmentManager extends EventEmitter {
-  state: GenericStateObject;
-  config: FrameworkConfig;
-  turnOrder: string[] = []; // dynamically extended by Provisioner
-
-  constructor(initialState: GenericStateObject, config: FrameworkConfig) {
-    super();
-    this.state = initialState;
-    this.config = config;
-  }
-
-  /** Triggers the next active agent to propose an action. */
-  async step(agents: Record<string, ActorAgent>): Promise<void> { ... }
-
-  /** Runs a while loop until state is terminal or max_turns is hit. */
-  async runEpisode(agents: Record<string, ActorAgent>): Promise<[GenericStateObject, object[]]> { ... }
-
-  /** Validates and injects a Provisioner-designed agent into the turn order. */
-  mountAgent(spec: NewAgentProvisioning): ActorAgent { ... }
+  // Methods
+  void Step(Map<String, ActorAgent> agents);
+  Tuple<State, List<Log>> RunEpisode(Map<String, ActorAgent> agents);
+  ActorAgent MountAgent(NewAgentProvisioning spec, LLMClient llmClient);
 }
 ```
 
-> **Complete method bodies**: The full algorithmic pseudocode for `step()`, `runEpisode()`, `mountAgent()`, `proposeAction()`, `evolve()`, and `designAgent()` is defined in [`engineering_implementation.md` §6](./engineering_implementation.md#6-complete-method-body-pseudocode).
+> **Complete method bodies**: The full algorithmic pseudocode for `step()`, `runEpisode()`, etc. is defined in [`engineering_implementation.md` §6](./engineering_implementation.md#6-complete-method-body-pseudocode).
 
-**Supported Events:**
-*   `episode:start` — fired when a new episode begins
-*   `turn:complete` — fired after each agent's turn, with the `ActionProposal`
-*   `episode:complete` — fired when an episode terminates, with the final state
-*   `agent:created` — fired when a Provisioner-designed agent is mounted
-*   `generation:complete` — fired when all epochs in a generation finish
+**Supported Abstract Events:**
+*   `episode:start` — Fired when a new episode begins.
+*   `turn:complete` — Fired after each agent's turn.
+*   `episode:complete` — Fired when an episode terminates.
+*   `agent:created` — Fired when a Provisioner-designed agent is mounted.
+*   `generation:complete` — Fired when all epochs in a generation finish.
 
-### C. The `ActorAgent`
+### `ActorAgent`
 The stateless wrapper around the LLM provider API.
 
-```typescript
-class ActorAgent {
-  id: string;
-  systemPrompt: string;
+```idl
+interface ActorAgent {
+  String id;
+  String systemPrompt;
 
-  constructor(opts: { archetypeId: string; immutableCore: string; mutableStrategy: string }) {
-    this.id = opts.archetypeId;
-    this.systemPrompt = `${opts.immutableCore}\n${opts.mutableStrategy}`;
-  }
-
-  /**
-   * Submits the agent's turn. Must return a valid ActionProposal
-   * (internal monologue + state mutations).
-   */
-  async proposeAction(currentState: GenericStateObject): Promise<ActionProposal> { ... }
+  // Receives the global state, returns proposed actions
+  ActionProposal ProposeAction(State currentState);
 }
 ```
 
-### D. The `DisruptorAgent`
-A specialized agent for Information and Tension disruptors.
+### `DisruptorAgent`
+Specialized agents for Information and Tension disruptors.
 
-```typescript
-class DisruptorAgent {
-  type: "information" | "tension";
+```idl
+interface DisruptorAgent {
+  String type; // "information" or "tension"
 
-  constructor(disruptorType: "information" | "tension", systemPrompt: string) {
-    this.type = disruptorType;
-  }
-
-  /**
-   * Returns either a DisruptorReport (headline + severity)
-   * or a TensionUpdate (new_tension_level + rationale).
-   */
-  async observe(transcript: object[], state: GenericStateObject): Promise<object> { ... }
+  // Observes transcript and state, returns generic Object
+  Object Observe(List<Log> transcript, State currentState);
 }
+
+class InformationDisruptor implements DisruptorAgent { ... }
+class TensionDisruptor implements DisruptorAgent { ... }
 ```
 
-### E. The `Critic` (Judge)
+### `Critic` (Judge)
 The isolated evaluator. It has no memory across episodes.
 
-```typescript
-class Critic {
-  rubric: object;
+```idl
+interface Critic {
+  // Constructor injects dependencies
+  Critic(String rubric, String systemPrompt, LLMClient llmClient);
 
-  constructor(rubric: object) {
-    this.rubric = rubric;
-  }
+  // Evaluates end state and returns scores mapped by agent ID
+  EvaluationResult Evaluate(State initialState, State finalState, List<Log> transcript);
+}
 
-  /**
-   * Returns a map of agent scores and rationales.
-   * Scores are integers from -5 to +5.
-   */
-  async evaluate(
-    initialState: GenericStateObject,
-    finalState: GenericStateObject,
-    transcript: object[]
-  ): Promise<{ scores: Record<string, number>, rationales: Record<string, string> }> { ... }
+struct EvaluationResult {
+  Map<String, Integer> scores;
+  Map<String, String> rationales;
 }
 ```
 
-### F. The `Capitalizer` (Interjector)
-The strategic observer that finds hidden overlap.
+### `Capitalizer` (Interjector)
+The strategic observer that calculates hidden overlap.
 
-```typescript
-const CapitalizerHint = z.object({
-  overlap_detected: z.boolean(),
-  confidence_score: z.number().int().min(1).max(10),
-  strategic_hint: z.string(),
-  rationale: z.string(),
-});
-type CapitalizerHint = z.infer<typeof CapitalizerHint>;
+```idl
+interface Capitalizer {
+  // Analyzes raw logs and outputs hints for the active speaker
+  CapitalizerHint AnalyzeOverlap(State currentState, List<Log> recentLogBook);
+}
 
-class Capitalizer {
-  constructor() {}
-
-  /**
-   * Analyzes the current state and recent internal monologues to calculate 
-   * strategic overlap and generate a hint for the next speaker.
-   */
-  async analyzeOverlap(
-    currentState: GenericStateObject,
-    recentLogBook: ActionLogs[]
-  ): Promise<CapitalizerHint> { ... }
+struct CapitalizerHint {
+  Boolean overlap_detected;
+  Integer confidence_score; // 1-10
+  String strategic_hint;
+  String rationale;
 }
 ```
 
-### G. The `Mutator`
+### `Mutator`
 The self-improvement engine. Operates in batch mode across completed epochs.
 
-```typescript
-class Mutator {
-  private vectorDb: VectorStore;
-  private sqlDb: Database;
-  private plateauCounter: number = 0;
+```idl
+interface Mutator {
+  // Generates variations, runs shadow trials, returns best agent or null
+  ActorAgent Evolve(ActorAgent agent, List<EpochResult> epochResults, Config config);
 
-  constructor(vectorDb: VectorStore, sqlDb: Database) {
-    this.vectorDb = vectorDb;
-    this.sqlDb = sqlDb;
-  }
-
-  /**
-   * Generates mutation variants, runs shadow trials, and returns
-   * the winning agent if it passes the acceptance criteria.
-   * Returns null if no variant beats the baseline.
-   */
-  async evolve(
-    agent: ActorAgent,
-    epochResults: Array<[GenericStateObject, Record<string, number>]>,
-    config: FrameworkConfig
-  ): Promise<ActorAgent | null> { ... }
-
-  /** Returns true if no improvement for `patience` consecutive generations. */
-  isPlateaued(patience: number): boolean {
-    return this.plateauCounter >= patience;
-  }
+  // Checks if plateau threshold has been reached
+  Boolean IsPlateaued(Integer patience);
 }
 ```
 
-### G. The `Provisioner`
-The self-creation engine. Designs entirely new agents.
+### `Provisioner`
+The self-creation engine.
 
-```typescript
-class Provisioner {
-  /**
-   * Analyzes the deadlock and outputs a complete NewAgentProvisioning
-   * specification for a new agent to break it.
-   */
-  async designAgent(
-    currentState: GenericStateObject,
-    epochResults: Array<[GenericStateObject, Record<string, number>]>,
-    semanticMemoryContext?: object[]
-  ): Promise<NewAgentProvisioning> { ... }
+```idl
+interface Provisioner {
+  // Analyzes deadlock and outputs entirely new agent specification
+  NewAgentProvisioning DesignAgent(
+    State currentState,
+    List<EpochResult> epochResults,
+    List<String> failedArchetypes,
+    List<Object> semanticMemoryContext
+  );
 }
 ```
 
-### H. The `Explorer` (Possibility Researcher)
-The external-facing research engine. Scans available ingredients and synthesizes convergence hypotheses.
+### `Explorer` (Possibility Researcher)
+Scans external capabilities and synthesizes convergence points.
 
-```typescript
-const Ingredient = z.object({
-  ingredient_id: z.string(),
-  category: z.enum(["model", "infrastructure", "tooling", "data_source", "framework"]),
-  name: z.string(),
-  maturity: z.enum(["research", "emerging", "production"]),
-  accessibility: z.enum(["public_api", "open_source", "proprietary"]),
-  tags: z.array(z.string()),
-});
-type Ingredient = z.infer<typeof Ingredient>;
+```idl
+interface Explorer {
+  List<Ingredient> ingredients;
 
-const ConvergenceHypothesis = z.object({
-  hypothesis_id: z.string(),
-  title: z.string(),
-  ingredients_combined: z.array(z.string()),
-  synthesis: z.string(),
-  disruption_target: z.string(),
-  feasibility_score: z.number().int().min(1).max(10),
-  novelty_score: z.number().int().min(1).max(10),
-  why_incumbents_missed_it: z.string(),
-});
-type ConvergenceHypothesis = z.infer<typeof ConvergenceHypothesis>;
+  Explorer(List<Ingredient> graph, String systemPrompt, LLMClient client);
 
-class Explorer {
-  ingredients: Ingredient[];
-
-  constructor(ingredientGraph: Ingredient[]) {
-    this.ingredients = ingredientGraph;
-  }
-
-  /** Runs convergence detection across the ingredient graph. */
-  async scan(): Promise<ConvergenceHypothesis[]> { ... }
-
-  /** Adds a new ingredient to the graph (e.g., from a new API release). */
-  ingestIngredient(ingredient: Ingredient): void { ... }
+  List<ConvergenceHypothesis> Scan();
+  void IngestIngredient(Ingredient ingredient);
 }
 ```
 
-## 2.  Error Handling & Fallbacks
+## 3. Error Handling & Fallbacks
 
 What happens when an LLM fundamentally breaks the rules? The framework uses strict application-layer circuit breakers (as defined in `safety_and_sandboxing.md`).
 
-When `agentA.proposeAction()` returns an invalid output (e.g., hallucinates a JSON key, forgets a comma, or proposes a state transition violating environmental rules), the `EnvironmentManager` executes the following fallback logic:
+When `ActorAgent.ProposeAction()` returns an invalid output, the `EnvironmentManager` executes the following fallback logic:
 
 1.  **Level 1: The Validation Retry Loop**
-    *   The `EnvironmentManager` immediately catches the Zod `ZodError`.
-    *   It re-prompts the LLM with the exact error message: `"Your output failed schema validation: Missing required field 'internal_monologue'. Please correct and try again."`
-    *   This loop repeats for a maximum of $K$ retries (default = 3, configurable via `FrameworkConfig.max_validation_retries`).
+    *   The `EnvironmentManager` catches the schema validation error.
+    *   It re-prompts the LLM with the exact error message: `"Your output failed schema validation: Missing required field... Please correct and try again."`
+    *   This loops for a maximum of $K$ retries (configured via `max_validation_retries`).
 2.  **Level 2: The Forced Concession Penalty**
-    *   If the LLM fails to generate valid syntax after $K$ retries, the system considers the agent mathematically "stunned."
-    *   The `EnvironmentManager` assumes control of that agent's turn. It forces the agent to skip its turn and automatically awards a minor structural concession to the opposing agent.
+    *   If the agent fails to generate valid syntax after $K$ retries, the system considers it mathematically "stunned."
+    *   The `EnvironmentManager` forces the agent to skip its turn, awarding a structural concession to the opposing agent.
 3.  **Level 3: Ultimate Episode Termination**
-    *   If the agent is fundamentally broken (e.g., the API provider is down, or the `Mutator` wrote an illegible strategy prompt), and forced penalties accumulate beyond a threshold (`FrameworkConfig.forced_concession_threshold`), the episode explicitly throws an `EpisodeCorruptedError`.
-    *   The `Judge` is bypassed entirely, and both the corrupted Agent and the Mutator are awarded a score of `-5` (Catastrophic System Failure), the lowest possible score on the rubric.
-    *   This mathematically ensures the `Mutator` never again explores the specific hyper-parameter set that caused the LLM to hallucinate irreparably.
+    *   If penalties accumulate beyond a threshold (`forced_concession_threshold`), the episode throws a severe internal error.
+    *   The `Judge` is bypassed, and the corrupted Agent and Mutator receive the lowest possible score (`-5`), mathematically ensuring the `Mutator` discards the flawed prompt.

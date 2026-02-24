@@ -160,13 +160,14 @@ async function runFullSimulation() {
 
     // Phase 3: Self-Creation (if plateau detected)
     if (mutator.isPlateaued(config.creation_patience)) {
-      const newAgentSpec = await creator.designAgent(env.state, epochResults);
+      const failedArchetypes = await creator.getFailedArchetypes(); // pseudo-code mapping
+      const newAgentSpec = await creator.designAgent(env.state, epochResults, failedArchetypes);
       if (config.require_human_approval_for_creation) {
         console.log(`Provisioner proposes: ${newAgentSpec.agent_id} (${newAgentSpec.archetype})`);
         const answer = await prompt("Deploy? [y/N]: ");
         if (answer?.toLowerCase() !== "y") continue;
       }
-      const newAgent = env.mountAgent(newAgentSpec);
+      const newAgent = env.mountAgent(newAgentSpec, llmClient);
       agents[newAgentSpec.agent_id] = newAgent;
     }
   }
@@ -315,7 +316,7 @@ async runEpisode(agents: Record<string, ActorAgent>): Promise<[GenericStateObjec
 Validates and injects a Provisioner-designed agent into the live turn order.
 
 ```typescript
-mountAgent(spec: NewAgentProvisioning): ActorAgent {
+mountAgent(spec: NewAgentProvisioning, llmClient: import("../llm/client.js").LLMClient): ActorAgent {
   // 1. Schema validation
   const validated = NewAgentProvisioning.parse(spec);
 
@@ -330,6 +331,7 @@ mountAgent(spec: NewAgentProvisioning): ActorAgent {
     archetypeId: validated.agent_id,
     immutableCore: validated.system_prompt,
     mutableStrategy: "", // Created agents start with no mutable layer
+    llmClient,
   });
 
   // 4. Register permissions (enforced in step())
@@ -466,6 +468,7 @@ Analyzes a structural deadlock and outputs a complete agent specification.
 async designAgent(
   currentState: GenericStateObject,
   epochResults: Array<[GenericStateObject, number, number]>,
+  failedArchetypes: string[],
   semanticMemoryContext?: object[]
 ): Promise<NewAgentProvisioning> {
   // Phase 1: Architectural Analysis
@@ -482,9 +485,8 @@ async designAgent(
       role: "user",
       content: JSON.stringify({
         deadlock_summary: deadlockSummary,
-        current_state: currentState,
-        semantic_memory: memoryContext,
-        failed_archetypes: await this.getFailedArchetypes(), // Avoid repeats
+        current_state_structure: currentState,
+        failed_archetypes: failedArchetypes,
       }),
     },
   ];

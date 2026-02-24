@@ -139,10 +139,15 @@ export async function runFullSimulation(options: OrchestratorOptions): Promise<v
             const primaryAgent = activeAgents[primaryActorId];
             if (!primaryAgent) return null;
 
-            const runShadowTrial = async (variant: ActorAgent): Promise<number[]> => {
-                const trialPromises = Array.from({ length: config.shadow_trial_count }).map(() =>
+            const runShadowTrial = async (variant: ActorAgent, isFastPrune?: boolean): Promise<number[]> => {
+                const trialCount = isFastPrune ? 3 : config.shadow_trial_count;
+                const trialConfig = isFastPrune
+                    ? { ...config, max_turns_per_episode: 3 }
+                    : config;
+
+                const trialPromises = Array.from({ length: trialCount }).map(() =>
                     limit(async () => {
-                        const shadowEnv = new EnvironmentManager(structuredClone(initialState), config);
+                        const shadowEnv = new EnvironmentManager(structuredClone(initialState), trialConfig as FrameworkConfig);
                         shadowEnv.turnOrder = Object.keys(activeAgents);
                         const shadowAgents = { ...activeAgents, [primaryActorId]: variant };
                         const [finalState, transcript] = await shadowEnv.runEpisode(shadowAgents);

@@ -53,7 +53,7 @@ export class Mutator {
          * A function to run shadow trials. This is injected to avoid circular
          * dependencies with EnvironmentManager.
          */
-        runShadowTrial: (variant: ActorAgent) => Promise<number[]>,
+        runShadowTrial: (variant: ActorAgent, isFastPrune?: boolean) => Promise<number[]>,
     ): Promise<ActorAgent | null> {
         // --- Phase A: Generation ---
         // Identify worst 20% of episodes for THIS specific agent
@@ -89,16 +89,34 @@ export class Mutator {
             }),
         );
 
-        // --- Phase B: Shadow Trials (The Arena) ---
+        // --- Phase B: Shadow Trials (The Arena / Successive Halving) ---
         // Enforced by docs/self_improvement_loop.md §3B — Phase B: Shadow Trials
+
+        // Phase B.1: Fast Pruning (Turn 3 Culling)
+        const fastPruneResults = await Promise.all(
+            variants.map(async (variant) => {
+                const scores = await runShadowTrial(variant, true);
+                return { variant, meanScore: mean(scores) };
+            })
+        );
+
+        // Sort descending by mean score
+        fastPruneResults.sort((a, b) => b.meanScore - a.meanScore);
+
+        // Cull bottom 50%
+        const survivors = fastPruneResults
+            .slice(0, Math.ceil(fastPruneResults.length / 2))
+            .map(r => r.variant);
+
+        // Phase B.2: Full Trial Allocation
         let bestVariant: ActorAgent | null = null;
         let bestLCB = -Infinity;
         let bestShadowScores: number[] = [];
         const baselineScores = epochResults.map((r) => r[1][agent.id] ?? 0);
         const baselineScore = mean(baselineScores);
 
-        for (const variant of variants) {
-            const shadowScores = await runShadowTrial(variant);
+        for (const variant of survivors) {
+            const shadowScores = await runShadowTrial(variant, false);
             const variantLCB = lowerConfidenceBound(shadowScores, config.acceptance_lcb_lambda);
             if (variantLCB > bestLCB) {
                 bestLCB = variantLCB;

@@ -48,15 +48,30 @@ export class Explorer {
             task: "Analyze these ingredients and identify novel products or capabilities that could be built by combining them but do NOT currently exist on the market.",
         });
 
-        const result = await this.llmClient.generateObject(
-            ExplorerScanOutput,
-            this.systemPrompt,
-            prompt,
-            // Higher temperature for creative hypothesis generation
-            { temperature: 0.9 },
-        );
-
-        return result.object.hypotheses;
+        try {
+            const result = await this.llmClient.generateObject(
+                ExplorerScanOutput,
+                this.systemPrompt,
+                prompt,
+                // Higher temperature for creative hypothesis generation
+                { temperature: 0.9 },
+            );
+            return result.object.hypotheses;
+        } catch (error) {
+            console.warn("Explorer failed to generate hypothesis. Using local fallback.", error);
+            // Deterministic local fallback
+            return [{
+                hypothesis_id: `hyp_fallback_${Date.now()}`,
+                title: "Fallback Convergence",
+                ingredients_combined: this.ingredients.length > 0 ? [this.ingredients[0].ingredient_id] : [],
+                synthesis: "A generic capability built from available parts.",
+                disruption_target: "General Market",
+                feasibility_score: 5,
+                novelty_score: 5,
+                why_incumbents_missed_it: "Deterministic local fallback triggered due to LLM failure.",
+                estimated_time_to_market: "Unknown"
+            }];
+        }
     }
 
     /**

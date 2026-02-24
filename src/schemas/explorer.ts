@@ -11,11 +11,14 @@ import { z } from "zod/v4";
  */
 export const Ingredient = z.object({
     ingredient_id: z.string(),
-    category: z.enum(["model", "infrastructure", "tooling", "data_source", "framework"]),
+    category: z.enum(["model", "infrastructure", "tooling", "data_source", "framework", "model_capability"]),
     name: z.string(),
     maturity: z.enum(["research", "emerging", "production"]),
     accessibility: z.enum(["public_api", "open_source", "proprietary"]),
     tags: z.array(z.string()),
+    cost_tier: z.string().optional(),
+    first_observed: z.string().optional(),
+    related_ingredients: z.array(z.string()).optional(),
 });
 export type Ingredient = z.infer<typeof Ingredient>;
 
@@ -34,5 +37,6 @@ export const ConvergenceHypothesis = z.object({
     feasibility_score: z.number().int().min(1).max(10),
     novelty_score: z.number().int().min(1).max(10),
     why_incumbents_missed_it: z.string(),
+    estimated_time_to_market: z.string().optional(),
 });
 export type ConvergenceHypothesis = z.infer<typeof ConvergenceHypothesis>;
